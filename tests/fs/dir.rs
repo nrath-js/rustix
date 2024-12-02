@@ -62,6 +62,59 @@ fn test_dir_read_from() {
     assert!(saw_cargo_toml);
 }
 
+#[cfg(any(linux_like))]
+#[test]
+fn test_dir_seek() {
+    let t = rustix::fs::openat(
+        rustix::fs::CWD,
+        rustix::cstr!("."),
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+
+    let mut dir = rustix::fs::Dir::read_from(&t).unwrap();
+
+    let _file = rustix::fs::openat(
+        &t,
+        rustix::cstr!("Cargo.toml"),
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+
+    // Read the first directory entry and record offset
+    let entry = dir.read().unwrap();
+    let entry = entry.unwrap();
+    let offset = entry.offset();
+
+    // Read the rest of the directory entries and record the names
+    let mut entries = Vec::new();
+    while let Some(entry) = dir.read() {
+        let entry = entry.unwrap();
+        entries.push(entry.file_name().to_string_lossy().into_owned());
+    }
+
+    // Seek to the stored position
+    dir.seekdir(offset).unwrap();
+
+    // Confirm that we're getting the same results as before
+    let mut entries2 = Vec::new();
+    while let Some(entry) = dir.read() {
+        let entry = entry.unwrap();
+        entries2.push(entry.file_name().to_string_lossy().into_owned());
+    }
+
+    // On arm-linux, the order of entries can apparently change when seeking
+    // within the same directory stream?!
+    if cfg!(all(target_arch = "arm", target_os = "linux")) {
+        entries.sort();
+        entries2.sort();
+    }
+
+    assert_eq!(entries, entries2);
+}
+
 #[test]
 fn test_dir_new() {
     let t = rustix::fs::openat(
