@@ -83,6 +83,8 @@ impl Dir {
     #[inline]
     pub fn seekdir(&mut self, offset: i64) -> io::Result<()> {
         self.any_errors = false;
+        self.rewind = false;
+        self.pos = self.buf.len();
         match io::retry_on_intr(|| {
             crate::backend::fs::syscalls::_seek(self.fd.as_fd(), offset, SEEK_SET)
         }) {

@@ -65,9 +65,24 @@ fn test_dir_read_from() {
 #[cfg(any(linux_like))]
 #[test]
 fn test_dir_seek() {
-    let t = rustix::fs::openat(
-        rustix::fs::CWD,
-        rustix::cstr!("."),
+    use std::io::Write;
+
+    let tempdir = tempfile::tempdir().unwrap();
+
+    // Create many files so that we exhaust the readdir buffer at least once.
+    let count = 500;
+    let prefix = "file_with_a_very_long_name_to_make_sure_that_we_fill_up_the_buffer";
+    let test_string = "This is a test string.";
+    let mut filenames = Vec::<String>::with_capacity(count);
+    for i in 0..count {
+        let filename = format!("{}-{}.txt", prefix, i);
+        let mut file = std::fs::File::create(&tempdir.path().join(&filename)).unwrap();
+        filenames.push(filename);
+        file.write_all(test_string.as_bytes()).unwrap();
+    }
+
+    let t = rustix::fs::open(
+        tempdir.path(),
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )
@@ -75,18 +90,11 @@ fn test_dir_seek() {
 
     let mut dir = rustix::fs::Dir::read_from(&t).unwrap();
 
-    let _file = rustix::fs::openat(
-        &t,
-        rustix::cstr!("Cargo.toml"),
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-    )
-    .unwrap();
-
-    // Read the first directory entry and record offset
-    let entry = dir.read().unwrap();
-    let entry = entry.unwrap();
-    let offset = entry.offset();
+    // Read the first half of directory entries and record offset
+    for _ in 0..count / 2 {
+        dir.read().unwrap().unwrap();
+    }
+    let offset = dir.read().unwrap().unwrap().offset();
 
     // Read the rest of the directory entries and record the names
     let mut entries = Vec::new();
@@ -94,6 +102,7 @@ fn test_dir_seek() {
         let entry = entry.unwrap();
         entries.push(entry.file_name().to_string_lossy().into_owned());
     }
+    assert!(entries.len() >= count / 2);
 
     // Seek to the stored position
     dir.seekdir(offset).unwrap();
@@ -103,13 +112,6 @@ fn test_dir_seek() {
     while let Some(entry) = dir.read() {
         let entry = entry.unwrap();
         entries2.push(entry.file_name().to_string_lossy().into_owned());
-    }
-
-    // On arm-linux, the order of entries can apparently change when seeking
-    // within the same directory stream?!
-    if cfg!(all(target_arch = "arm", target_os = "linux")) {
-        entries.sort();
-        entries2.sort();
     }
 
     assert_eq!(entries, entries2);
